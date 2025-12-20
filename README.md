@@ -23,6 +23,7 @@ Copy `custom_components/peblar_ws` to: config/custom_components/
 ## Configuration
 The Charger needs to be connected to the local network.
 See the sticker on the back of the blue built booklet and "Enable WLAN Client" in the web interface, connect it to your local WiFi.
+
 ATTENTION! DO NOT disable "WLAN hotspot" or you will not be able to get back in when your network is out.
 
 You will need:

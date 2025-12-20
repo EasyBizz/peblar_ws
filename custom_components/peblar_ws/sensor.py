@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
+
 from dataclasses import asdict
 
 from homeassistant.components.sensor import SensorEntity
@@ -81,6 +83,8 @@ class PeblarStateSensor(_BasePeblarSensor):
 class PeblarPowerSensor(_BasePeblarSensor):
     _attr_name = "Peblar Power"
     _attr_native_unit_of_measurement = "W"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, hass, entry):
         super().__init__(hass, entry)
@@ -98,6 +102,8 @@ class PeblarPowerSensor(_BasePeblarSensor):
 class PeblarEnergySensor(_BasePeblarSensor):
     _attr_name = "Peblar Total Energy"
     _attr_native_unit_of_measurement = "Wh"
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
 
     def __init__(self, hass, entry):
         super().__init__(hass, entry)

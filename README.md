@@ -21,9 +21,12 @@ Home Assistant custom integration for Peblar-based EV chargers
 Copy `custom_components/peblar_ws` to: config/custom_components/
 
 ## Configuration
+The Charger needs to be connected to the local network.
+See the sticker on the back of the blue built booklet and "Enable WLAN Client" in the web interface, connect it to your local WiFi.
+
 You will need:
-- Charger IP address
-- Web UI username
+- Charger IP address (Local)
+- Web UI username (not required)
 - Web UI password
 
 ## Notes

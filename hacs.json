@@ -1,0 +1,7 @@
+{
+  "name": "Peblar WS (Coolblue / BlueBuilt)",
+  "content_in_root": false,
+  "domains": ["peblar_ws"],
+  "iot_class": "local_push",
+  "render_readme": true
+}

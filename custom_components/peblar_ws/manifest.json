@@ -1,0 +1,12 @@
+{
+  "domain": "peblar_ws",
+  "name": "Peblar WS (Coolblue / BlueBuilt)",
+  "version": "1.0.0",
+  "documentation": "https://github.com/YOUR_GITHUB_USERNAME/peblar_ws",
+  "issue_tracker": "https://github.com/YOUR_GITHUB_USERNAME/peblar_ws/issues",
+  "requirements": [],
+  "dependencies": [],
+  "codeowners": ["@EasyBizz"],
+  "iot_class": "local_push",
+  "config_flow": true
+}

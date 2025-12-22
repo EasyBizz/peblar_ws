@@ -1,0 +1,18 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Peblar WS",
+        "description": "Enter the charger connection details. {host_hint}",
+        "data": {
+          "host": "Host",
+          "username": "Username",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "host_format": "Enter a host without http:// or https://"
+    }
+  }
+}

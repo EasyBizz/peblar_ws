@@ -70,6 +70,8 @@ class PeblarStateSensor(_BasePeblarSensor):
         super().__init__(hass, entry)
         self._attr_name = "Peblar State"
         self._attr_unique_id = f"{entry.entry_id}_state"
+        self._attr_device_class = SensorDeviceClass.ENUM
+        self._attr_icon = "mdi:ev-plug-type2"
 
     @property
     def native_value(self):
@@ -85,6 +87,7 @@ class PeblarPowerSensor(_BasePeblarSensor):
     _attr_native_unit_of_measurement = "W"
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:lightning-bolt"
 
     def __init__(self, hass, entry):
         super().__init__(hass, entry)
@@ -104,6 +107,7 @@ class PeblarEnergySensor(_BasePeblarSensor):
     _attr_native_unit_of_measurement = "Wh"
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_icon = "mdi:lightning-bolt"
 
     def __init__(self, hass, entry):
         super().__init__(hass, entry)
@@ -117,6 +121,9 @@ class PeblarEnergySensor(_BasePeblarSensor):
 class PeblarWifiRssiSensor(_BasePeblarSensor):
     _attr_name = "Peblar WiFi RSSI"
     _attr_native_unit_of_measurement = "dBm"
+    _attr_device_class = SensorDeviceClass.SIGNAL_STRENGTH
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:wifi"
 
     def __init__(self, hass, entry):
         super().__init__(hass, entry)
@@ -129,6 +136,8 @@ class PeblarWifiRssiSensor(_BasePeblarSensor):
 
 class PeblarLteCarrierSensor(_BasePeblarSensor):
     _attr_name = "Peblar LTE Carrier"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_icon = "mdi:sim"
 
     def __init__(self, hass, entry):
         super().__init__(hass, entry)

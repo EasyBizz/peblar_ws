@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import logging
+from datetime import timedelta
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +19,7 @@ from .const import (
     CONF_HOST,
     CONF_USERNAME,
     CONF_PASSWORD,
+    CONF_USE_WS,
     WS_PATH,
     LOGIN_PATH,
     TOPIC_SESSION,
@@ -39,6 +41,15 @@ EXTRA_TOPICS = [
 
 SUBSCRIBE_TOPICS = [TOPIC_SESSION, TOPIC_NETWORK, *EXTRA_TOPICS]
 
+POLL_INTERVAL_CHARGING = timedelta(minutes=1)
+POLL_INTERVAL_IDLE = timedelta(minutes=5)
+POLL_ENDPOINTS = [
+    "/api/v1/session/status",
+    "/api/v1/meter/status",
+    "/api/v1/meter/data",
+    "/api/v1/statistics/session",
+]
+
 
 @dataclass
 class PeblarState:
@@ -56,15 +67,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     state = PeblarState()
 
-    task = hass.async_create_background_task(
-        _runner(hass, entry),
-        name=f"Peblar WS runner ({entry.entry_id})",
+    use_ws = entry.options.get(CONF_USE_WS, entry.data.get(CONF_USE_WS, True))
+    ws_task = None
+    if use_ws:
+        ws_task = hass.async_create_background_task(
+            _runner(hass, entry),
+            name=f"Peblar WS runner ({entry.entry_id})",
+        )
+    poll_task = hass.async_create_background_task(
+        _poll_runner(hass, entry),
+        name=f"Peblar poll runner ({entry.entry_id})",
     )
 
     hass.data[DOMAIN][entry.entry_id] = {
         "state": state,
-        "task": task,
+        "task": ws_task,
+        "poll_task": poll_task,
+        "cookie": None,
     }
+    entry.async_on_unload(entry.add_update_listener(_update_listener))
 
     await hass.config_entries.async_forward_entry_setups(entry, ["sensor"])
     return True
@@ -72,12 +93,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     data = hass.data[DOMAIN].pop(entry.entry_id, None)
-    if data and (task := data.get("task")):
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+    if data:
+        for task in (data.get("task"), data.get("poll_task")):
+            if task:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
     return await hass.config_entries.async_unload_platforms(entry, ["sensor"])
+
+
+async def _update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def _login_and_get_cookie(
@@ -151,6 +178,7 @@ async def _runner(hass: HomeAssistant, entry: ConfigEntry) -> None:
     while True:
         try:
             cookie = await _login_and_get_cookie(session, base_http, username, password)
+            hass.data[DOMAIN][entry.entry_id]["cookie"] = cookie
             _LOGGER.info("Peblar WS logged in; got session cookie.")
 
             headers = {
@@ -282,3 +310,109 @@ def _handle_ws_text(hass: HomeAssistant, entry: ConfigEntry, text: str) -> None:
         return
 
     # Other topics ignored for now (diagnostics/statistics)
+
+
+def _is_charging(state: PeblarState) -> bool:
+    if not state.session_state:
+        return False
+    return "charg" in state.session_state.lower()
+
+
+async def _poll_runner(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    host = entry.data[CONF_HOST]
+    username = entry.data[CONF_USERNAME]
+    password = entry.data[CONF_PASSWORD]
+    base_http = f"http://{host}"
+    session = async_get_clientsession(hass)
+
+    while True:
+        try:
+            await _poll_once(hass, entry, session, base_http, username, password)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            _LOGGER.debug("Peblar poll error: %s", e)
+
+        state: PeblarState = hass.data[DOMAIN][entry.entry_id]["state"]
+        interval = POLL_INTERVAL_CHARGING if _is_charging(state) else POLL_INTERVAL_IDLE
+        await asyncio.sleep(interval.total_seconds())
+
+
+async def _poll_once(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    session: ClientSession,
+    base_http: str,
+    username: str,
+    password: str,
+) -> None:
+    data = hass.data[DOMAIN][entry.entry_id]
+    cookie = data.get("cookie")
+    headers = {
+        "Origin": base_http,
+        "Accept": "application/json, text/plain, */*",
+    }
+    if cookie:
+        headers["Cookie"] = cookie
+
+    payload = await _fetch_first_payload(session, base_http, headers)
+    if payload is None:
+        cookie = await _login_and_get_cookie(session, base_http, username, password)
+        data["cookie"] = cookie
+        headers["Cookie"] = cookie
+        payload = await _fetch_first_payload(session, base_http, headers)
+
+    if payload is not None:
+        _apply_poll_payload(hass, entry, payload)
+
+
+async def _fetch_first_payload(
+    session: ClientSession, base_http: str, headers: dict[str, str]
+) -> dict[str, Any] | None:
+    for endpoint in POLL_ENDPOINTS:
+        url = f"{base_http}{endpoint}"
+        async with session.get(url, headers=headers) as resp:
+            if resp.status in (401, 403):
+                return None
+            if resp.status != 200:
+                continue
+            try:
+                payload = await resp.json()
+            except Exception:
+                continue
+            if isinstance(payload, dict):
+                return payload
+    return None
+
+
+def _apply_poll_payload(hass: HomeAssistant, entry: ConfigEntry, payload: dict[str, Any]) -> None:
+    st: PeblarState = hass.data[DOMAIN][entry.entry_id]["state"]
+    changed = False
+
+    # Some endpoints return { "state": "...", "meterData": {...} }
+    new_state = payload.get("state")
+    if new_state is not None and new_state != st.session_state:
+        st.session_state = new_state
+        changed = True
+
+    meter = payload.get("meterData") if isinstance(payload.get("meterData"), dict) else payload
+    if isinstance(meter, dict):
+        ip = meter.get("instantaneousPower")
+        te = meter.get("totalEnergy")
+        if ip is not None and ip != st.instantaneous_power:
+            st.instantaneous_power = ip
+            changed = True
+        if te is not None and te != st.total_energy:
+            st.total_energy = te
+            changed = True
+
+    # /statistics/session returns { "data": [ { "averagePower": [...], ... }, ... ] }
+    if isinstance(payload.get("data"), list) and payload["data"]:
+        latest = payload["data"][0]
+        if isinstance(latest, dict):
+            ap = latest.get("averagePower")
+            if ap is not None and ap != st.instantaneous_power:
+                st.instantaneous_power = ap
+                changed = True
+
+    _update_and_notify(hass, entry, changed)

@@ -7,12 +7,22 @@
         "data": {
           "host": "Host",
           "username": "Username",
-          "password": "Password"
+          "password": "Password",
+          "use_websocket": "Use WebSocket live updates (may block web UI)"
         }
       }
     },
     "error": {
       "host_format": "Enter a host without http:// or https://"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "use_websocket": "Use WebSocket live updates (may block web UI)"
+        }
+      }
     }
   }
 }

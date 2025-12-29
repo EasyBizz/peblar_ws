@@ -49,14 +49,14 @@ class PeblarWSConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 class PeblarWSOptionsFlow(config_entries.OptionsFlow):
     def __init__(self, config_entry):
-        super().__init__(config_entry)
+        self._config_entry = config_entry
 
     async def async_step_init(self, user_input=None):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        use_ws_default = self.config_entry.options.get(
-            CONF_USE_WS, self.config_entry.data.get(CONF_USE_WS, True)
+        use_ws_default = self._config_entry.options.get(
+            CONF_USE_WS, self._config_entry.data.get(CONF_USE_WS, True)
         )
         schema = vol.Schema(
             {

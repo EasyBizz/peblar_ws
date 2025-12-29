@@ -1,7 +1,7 @@
 {
   "domain": "peblar_ws",
   "name": "Peblar WS (Coolblue / BlueBuilt)",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "documentation": "https://github.com/EasyBizz/peblar_ws",
   "issue_tracker": "https://github.com/EasyBizz/peblar_ws/issues",
   "requirements": [],

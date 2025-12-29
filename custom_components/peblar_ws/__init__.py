@@ -188,6 +188,7 @@ async def _runner(hass: HomeAssistant, entry: ConfigEntry) -> None:
             }
 
             async with session.ws_connect(ws_url, headers=headers, heartbeat=30) as ws:
+                _LOGGER.debug("Peblar WS connected, subscribing to topics")
                 # Subscribe to topics (avoid guessing which one carries live meter updates)
                 for topic in SUBSCRIBE_TOPICS:
                     await ws.send_str(json.dumps({"action": "subscribe", "topic": topic}))
@@ -232,11 +233,18 @@ def _handle_ws_text(hass: HomeAssistant, entry: ConfigEntry, text: str) -> None:
     try:
         payload = json.loads(text)
     except Exception:
+        _LOGGER.debug("Peblar WS non-JSON message: %s", text[:200])
         return
 
     topic = payload.get("topic")
     msg_type = payload.get("type")
     data: dict[str, Any] = payload.get("data") or {}
+    _LOGGER.debug(
+        "Peblar WS message: type=%s topic=%s data_keys=%s",
+        msg_type,
+        topic,
+        list(data.keys()) if isinstance(data, dict) else None,
+    )
 
     # Only process events for state updates
     if msg_type != "event":
@@ -249,6 +257,7 @@ def _handle_ws_text(hass: HomeAssistant, entry: ConfigEntry, text: str) -> None:
     if topic == TOPIC_SESSION:
         new_state = data.get("state")
         if new_state != st.session_state:
+            _LOGGER.debug("Peblar WS session state: %s", new_state)
             st.session_state = new_state
             changed = True
 
@@ -257,9 +266,11 @@ def _handle_ws_text(hass: HomeAssistant, entry: ConfigEntry, text: str) -> None:
         te = meter.get("totalEnergy")
 
         if ip is not None and ip != st.instantaneous_power:
+            _LOGGER.debug("Peblar WS instantaneous power: %s", ip)
             st.instantaneous_power = ip
             changed = True
         if te is not None and te != st.total_energy:
+            _LOGGER.debug("Peblar WS total energy: %s", te)
             st.total_energy = te
             changed = True
 

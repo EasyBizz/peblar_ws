@@ -5,6 +5,7 @@ import contextlib
 import json
 import logging
 from datetime import timedelta
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -43,7 +44,9 @@ SUBSCRIBE_TOPICS = [TOPIC_SESSION, TOPIC_NETWORK, *EXTRA_TOPICS]
 
 POLL_INTERVAL_CHARGING = timedelta(seconds=30)
 POLL_INTERVAL_IDLE = timedelta(minutes=5)
-WS_RECONNECT_INTERVAL = timedelta(minutes=5)
+WS_SNAPSHOT_TIMEOUT = timedelta(seconds=15)
+STALE_AFTER_CHARGING = timedelta(minutes=2)
+STALE_AFTER_IDLE = timedelta(minutes=12)
 POLL_ENDPOINTS = [
     "/api/v1/session/status",
     "/api/v1/meter/status",
@@ -61,6 +64,7 @@ class PeblarState:
     wlan_rssi: int | None = None
     lte_carrier: str | None = None
     lte_technology: str | None = None
+    last_update_monotonic: float | None = None
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -72,8 +76,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     ws_task = None
     if use_ws:
         ws_task = hass.async_create_background_task(
-            _runner(hass, entry),
-            name=f"Peblar WS runner ({entry.entry_id})",
+            _snapshot_runner(hass, entry),
+            name=f"Peblar WS snapshot runner ({entry.entry_id})",
         )
     poll_task = hass.async_create_background_task(
         _poll_runner(hass, entry),
@@ -166,7 +170,7 @@ async def _login_and_get_cookie(
     raise RuntimeError(f"Login failed for all payload formats. Last error: {last_error}")
 
 
-async def _runner(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def _snapshot_runner(hass: HomeAssistant, entry: ConfigEntry) -> None:
     host = entry.data[CONF_HOST]
     username = entry.data[CONF_USERNAME]
     password = entry.data[CONF_PASSWORD]
@@ -180,7 +184,6 @@ async def _runner(hass: HomeAssistant, entry: ConfigEntry) -> None:
         try:
             cookie = await _login_and_get_cookie(session, base_http, username, password)
             hass.data[DOMAIN][entry.entry_id]["cookie"] = cookie
-            _LOGGER.info("Peblar WS logged in; got session cookie.")
 
             headers = {
                 "Origin": base_http,
@@ -193,35 +196,41 @@ async def _runner(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 for topic in SUBSCRIBE_TOPICS:
                     await ws.send_str(json.dumps({"action": "subscribe", "topic": topic}))
 
-                # Receive loop - include timeout to recover from silent stalls
-                while True:
-                    msg = await ws.receive(timeout=65)
+                got_snapshot = False
+                deadline = time.monotonic() + WS_SNAPSHOT_TIMEOUT.total_seconds()
+                while time.monotonic() < deadline:
+                    msg = await ws.receive(timeout=WS_SNAPSHOT_TIMEOUT.total_seconds())
 
                     if msg.type == WSMsgType.TEXT:
-                        _handle_ws_text(hass, entry, msg.data)
+                        if _handle_ws_text(hass, entry, msg.data):
+                            got_snapshot = True
+                            break
                     elif msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSED):
                         raise RuntimeError("WebSocket closed by server")
                     elif msg.type == WSMsgType.ERROR:
                         raise RuntimeError(f"WebSocket error: {ws.exception()}")
                     elif msg.type == WSMsgType.PING:
-                        # aiohttp handles ping/pong internally with heartbeat, but keep for completeness
                         continue
                     elif msg.type == WSMsgType.PONG:
                         continue
                     elif msg.type == WSMsgType.CLOSING:
                         raise RuntimeError("WebSocket closing")
                     else:
-                        # ignore binary/unknown
                         continue
 
+                if not got_snapshot:
+                    _LOGGER.debug("Peblar WS snapshot timed out without session event")
+
         except asyncio.TimeoutError:
-            _LOGGER.warning("Peblar WS receive timeout; reconnecting")
+            _LOGGER.debug("Peblar WS snapshot timeout")
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            _LOGGER.warning("Peblar WS reconnecting after error: %s", e)
+            _LOGGER.warning("Peblar WS snapshot error: %s", e)
 
-        await asyncio.sleep(WS_RECONNECT_INTERVAL.total_seconds())
+        state: PeblarState = hass.data[DOMAIN][entry.entry_id]["state"]
+        interval = POLL_INTERVAL_CHARGING if _is_charging(state) else POLL_INTERVAL_IDLE
+        await asyncio.sleep(interval.total_seconds())
 
 
 def _update_and_notify(hass: HomeAssistant, entry: ConfigEntry, changed: bool) -> None:
@@ -229,12 +238,16 @@ def _update_and_notify(hass: HomeAssistant, entry: ConfigEntry, changed: bool) -
         async_dispatcher_send(hass, f"{SIGNAL_UPDATE}_{entry.entry_id}")
 
 
-def _handle_ws_text(hass: HomeAssistant, entry: ConfigEntry, text: str) -> None:
+def _notify(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    async_dispatcher_send(hass, f"{SIGNAL_UPDATE}_{entry.entry_id}")
+
+
+def _handle_ws_text(hass: HomeAssistant, entry: ConfigEntry, text: str) -> bool:
     try:
         payload = json.loads(text)
     except Exception:
         _LOGGER.debug("Peblar WS non-JSON message: %s", text[:200])
-        return
+        return False
 
     topic = payload.get("topic")
     msg_type = payload.get("type")
@@ -248,7 +261,7 @@ def _handle_ws_text(hass: HomeAssistant, entry: ConfigEntry, text: str) -> None:
 
     # Only process events for state updates
     if msg_type != "event":
-        return
+        return False
 
     st: PeblarState = hass.data[DOMAIN][entry.entry_id]["state"]
     changed = False
@@ -274,8 +287,10 @@ def _handle_ws_text(hass: HomeAssistant, entry: ConfigEntry, text: str) -> None:
             st.total_energy = te
             changed = True
 
+        if changed:
+            st.last_update_monotonic = time.monotonic()
         _update_and_notify(hass, entry, changed)
-        return
+        return True
 
     # ---- Network status (known working structure from your Safari capture)
     if topic == TOPIC_NETWORK:
@@ -298,7 +313,7 @@ def _handle_ws_text(hass: HomeAssistant, entry: ConfigEntry, text: str) -> None:
                 changed = True
 
         _update_and_notify(hass, entry, changed)
-        return
+        return False
 
     # ---- Meter topics (structure differs between firmwares; try a few common shapes)
     if topic in ("/meter/data", "/meter/status"):
@@ -318,16 +333,29 @@ def _handle_ws_text(hass: HomeAssistant, entry: ConfigEntry, text: str) -> None:
                 st.total_energy = te
                 changed = True
 
+        if changed:
+            st.last_update_monotonic = time.monotonic()
         _update_and_notify(hass, entry, changed)
-        return
+        return False
 
     # Other topics ignored for now (diagnostics/statistics)
+    return False
 
 
 def _is_charging(state: PeblarState) -> bool:
     if not state.session_state:
         return False
     return "charg" in state.session_state.lower()
+
+
+def _is_stale(state: PeblarState) -> bool:
+    if state.last_update_monotonic is None:
+        return True
+    elapsed = time.monotonic() - state.last_update_monotonic
+    stale_after = (
+        STALE_AFTER_CHARGING if _is_charging(state) else STALE_AFTER_IDLE
+    ).total_seconds()
+    return elapsed > stale_after
 
 
 async def _poll_runner(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -347,6 +375,7 @@ async def _poll_runner(hass: HomeAssistant, entry: ConfigEntry) -> None:
         except Exception as e:
             _LOGGER.debug("Peblar poll error: %s", e)
 
+        _notify(hass, entry)
         state: PeblarState = hass.data[DOMAIN][entry.entry_id]["state"]
         interval = POLL_INTERVAL_CHARGING if _is_charging(state) else POLL_INTERVAL_IDLE
         await asyncio.sleep(interval.total_seconds())
@@ -432,4 +461,6 @@ def _apply_poll_payload(hass: HomeAssistant, entry: ConfigEntry, payload: dict[s
                 st.instantaneous_power = ap
                 changed = True
 
+    if changed:
+        st.last_update_monotonic = time.monotonic()
     _update_and_notify(hass, entry, changed)

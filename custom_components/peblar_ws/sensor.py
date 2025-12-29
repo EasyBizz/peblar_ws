@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo
 
-from . import SIGNAL_UPDATE, PeblarState
+from . import SIGNAL_UPDATE, PeblarState, _is_stale
 from .const import DOMAIN
 
 
@@ -63,6 +63,10 @@ class _BasePeblarSensor(SensorEntity):
     @callback
     def _handle_update(self):
         self.async_write_ha_state()
+
+    @property
+    def available(self) -> bool:
+        return not _is_stale(self._state_obj)
 
 
 class PeblarStateSensor(_BasePeblarSensor):

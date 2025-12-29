@@ -41,8 +41,9 @@ EXTRA_TOPICS = [
 
 SUBSCRIBE_TOPICS = [TOPIC_SESSION, TOPIC_NETWORK, *EXTRA_TOPICS]
 
-POLL_INTERVAL_CHARGING = timedelta(minutes=1)
+POLL_INTERVAL_CHARGING = timedelta(seconds=30)
 POLL_INTERVAL_IDLE = timedelta(minutes=5)
+WS_RECONNECT_INTERVAL = timedelta(minutes=5)
 POLL_ENDPOINTS = [
     "/api/v1/session/status",
     "/api/v1/meter/status",
@@ -219,7 +220,7 @@ async def _runner(hass: HomeAssistant, entry: ConfigEntry) -> None:
         except Exception as e:
             _LOGGER.warning("Peblar WS reconnecting after error: %s", e)
 
-        await asyncio.sleep(5)
+        await asyncio.sleep(WS_RECONNECT_INTERVAL.total_seconds())
 
 
 def _update_and_notify(hass: HomeAssistant, entry: ConfigEntry, changed: bool) -> None:

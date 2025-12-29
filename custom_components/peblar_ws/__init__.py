@@ -327,6 +327,8 @@ async def _poll_runner(hass: HomeAssistant, entry: ConfigEntry) -> None:
     session = async_get_clientsession(hass)
 
     while True:
+        if entry.entry_id not in hass.data.get(DOMAIN, {}):
+            return
         try:
             await _poll_once(hass, entry, session, base_http, username, password)
         except asyncio.CancelledError:
@@ -347,7 +349,10 @@ async def _poll_once(
     username: str,
     password: str,
 ) -> None:
-    data = hass.data[DOMAIN][entry.entry_id]
+    domain_data = hass.data.get(DOMAIN, {})
+    if entry.entry_id not in domain_data:
+        return
+    data = domain_data[entry.entry_id]
     cookie = data.get("cookie")
     headers = {
         "Origin": base_http,
